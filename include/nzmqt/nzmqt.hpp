@@ -177,6 +177,7 @@ namespace nzmqt
 #ifdef ZMQ_REQ_RELAXED
             OPT_REQ_RELAXED = ZMQ_REQ_RELAXED,
 #endif
+            OPT_LAST_ENDPOINT = ZMQ_LAST_ENDPOINT,
 
             // Get and set.
             OPT_AFFINITY = ZMQ_AFFINITY,
@@ -204,7 +205,7 @@ namespace nzmqt
 #endif
         };
 
-        ~ZMQSocket();
+        virtual ~ZMQSocket();
 
         using zmqsuper::operator void *;
 
@@ -308,6 +309,8 @@ namespace nzmqt
         // If an empty list is provided this method doesn't do anything and returns trua.
         bool sendMessage(const QList<QByteArray>& msg_, nzmqt::ZMQSocket::SendFlags flags_ = SND_DONTWAIT);
 
+        // Slot called internally to query the events() flags from the event loop after a sendMessage call.
+        void checkEvents();
 
     protected:
         ZMQSocket(ZMQContext* context_, Type type_);
@@ -338,7 +341,7 @@ namespace nzmqt
         // Deleting children is necessary, because otherwise the children are deleted after the context
         // which results in a blocking state. So we delete the children before the zmq::context_t
         // destructor implementation is called.
-        ~ZMQContext();
+        virtual ~ZMQContext();
 
         using zmqsuper::operator void*;
 
@@ -370,7 +373,7 @@ namespace nzmqt
         // Remove the given socket object from the list of registered sockets.
         virtual void unregisterSocket(ZMQSocket* socket_);
 
-        virtual const Sockets& registeredSockets() const;
+        const Sockets& registeredSockets() const;
 
     private:
         Sockets m_sockets;
@@ -510,11 +513,9 @@ namespace nzmqt
 
     protected slots:
         void socketReadActivity();
-        void socketWriteActivity();
 
     private:
         QSocketNotifier *socketNotifyRead_;
-        QSocketNotifier *socketNotifyWrite_;
     };
 
     class NZMQT_API SocketNotifierZMQContext : public ZMQContext

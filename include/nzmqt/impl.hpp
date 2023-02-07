@@ -179,13 +179,48 @@ NZMQT_INLINE void ZMQSocket::disconnectFrom(const char* addr_)
 
 NZMQT_INLINE bool ZMQSocket::sendMessage(ZMQMessage& msg_, SendFlags flags_)
 {
-    return send(msg_, flags_);
+    if (!send(msg_, flags_)) {
+        return false;
+    }
+
+    /**
+     * From http://api.zeromq.org/4-3:zmq-getsockopt
+     * --
+     * The returned file descriptor is also used internally by the zmq_send and
+     * zmq_recv functions. As the descriptor is edge triggered, applications
+     * must update the state of ZMQ_EVENTS after each invocation of zmq_send or
+     * zmq_recv. To be more explicit: after calling zmq_send the socket may
+     * become readable (and vice versa) without triggering a read event on the
+     * file descriptor.
+     * --
+     *
+     * SocketNotifierZMQSocket expects the socket file descriptor to trigger a
+     * READ activated event that never comes in certain circumstances. By
+     * checking the events() after calling send, we can catch events the
+     * SocketNotifierZMQSocket might otherwise miss.
+     *
+     * Invoking the checkEvents method via a Qt::QueuedConnection ensures that
+     * the events flags are checked within the main event loop. This avoids
+     * pitfalls where receiveMessage signals can cause re-entrant calls to in
+     * handlers.
+     */
+    QMetaObject::invokeMethod(this, "checkEvents", Qt::QueuedConnection);
+    return true;
+}
+
+NZMQT_INLINE void ZMQSocket::checkEvents()
+{
+    while(isConnected() && (events() & EVT_POLLIN))
+    {
+        const QList<QByteArray> & message = receiveMessage();
+        emit messageReceived(message);
+    }
 }
 
 NZMQT_INLINE bool ZMQSocket::sendMessage(const QByteArray& bytes_, SendFlags flags_)
 {
     ZMQMessage msg(bytes_);
-    return send(msg, flags_);
+    return sendMessage(msg, flags_);
 }
 
 NZMQT_INLINE bool ZMQSocket::sendMessage(const QList<QByteArray>& msg_, SendFlags flags_)
@@ -566,15 +601,11 @@ NZMQT_INLINE void PollingZMQContext::unregisterSocket(ZMQSocket* socket_)
 NZMQT_INLINE SocketNotifierZMQSocket::SocketNotifierZMQSocket(ZMQContext* context_, Type type_)
     : super(context_, type_)
     , socketNotifyRead_(0)
-    , socketNotifyWrite_(0)
 {
     qintptr fd = fileDescriptor();
 
     socketNotifyRead_ = new QSocketNotifier(fd, QSocketNotifier::Read, this);
     QObject::connect(socketNotifyRead_, &QSocketNotifier::activated, this, &SocketNotifierZMQSocket::socketReadActivity);
-
-    socketNotifyWrite_ = new QSocketNotifier(fd, QSocketNotifier::Write, this);
-    QObject::connect(socketNotifyWrite_, &QSocketNotifier::activated, this, &SocketNotifierZMQSocket::socketWriteActivity);
 }
 
 NZMQT_INLINE SocketNotifierZMQSocket::~SocketNotifierZMQSocket()
@@ -585,7 +616,6 @@ NZMQT_INLINE SocketNotifierZMQSocket::~SocketNotifierZMQSocket()
 NZMQT_INLINE void SocketNotifierZMQSocket::close()
 {
     socketNotifyRead_->deleteLater();
-    socketNotifyWrite_->deleteLater();
     super::close();
 }
 
@@ -609,28 +639,6 @@ NZMQT_INLINE void SocketNotifierZMQSocket::socketReadActivity()
 
     socketNotifyRead_->setEnabled(true);
 }
-
-NZMQT_INLINE void SocketNotifierZMQSocket::socketWriteActivity()
-{
-    socketNotifyWrite_->setEnabled(false);
-
-    try
-    {
-        while (isConnected() && (events() & EVT_POLLIN))
-        {
-            const QList<QByteArray> & message = receiveMessage();
-            emit messageReceived(message);
-        }
-    }
-    catch (const ZMQException& ex)
-    {
-        qWarning("Exception during write: %s", ex.what());
-        emit notifierError(ex.num(), ex.what());
-    }
-
-    socketNotifyWrite_->setEnabled(true);
-}
-
 
 
 /*
